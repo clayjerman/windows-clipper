@@ -1,0 +1,583 @@
+"""
+AI Clipper - Main FastAPI Server
+"""
+import os
+import logging
+import asyncio
+from typing import List, Optional
+from datetime import datetime
+import uuid
+
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, BackgroundTasks
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel
+
+from .core.config import settings
+from .core.exceptions import AIClipperError
+from .models.video import (
+    Video,
+    VideoMetadata,
+    ClipSettings,
+    ProcessingProgress,
+    Transcription
+)
+from .models.clip import Clip, ClipExport, ExportResult
+from .models.analysis import ContentAnalysis, ViralScoreResult
+
+from .services.downloader import VideoDownloader
+from .services.transcriber import Transcriber
+from .services.analyzer import ContentAnalyzer
+from .services.scorer import ViralScorer
+from .services.detector import MouthTracker
+from .services.editor import VideoEditor
+from .services.cache import CacheService
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
+# Initialize FastAPI
+app = FastAPI(
+    title="AI Clipper API",
+    description="API for generating viral short-form clips from YouTube videos",
+    version="1.0.0"
+)
+
+# CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Configure appropriately for production
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Global services
+downloader = VideoDownloader()
+transcriber = Transcriber()
+analyzer = ContentAnalyzer()
+scorer = ViralScorer()
+mouth_tracker = MouthTracker()
+editor = VideoEditor()
+cache = CacheService()
+
+# Active WebSocket connections
+active_connections: List[WebSocket] = []
+
+# Processing jobs (in production, use Redis or similar)
+processing_jobs = {}
+
+
+# Pydantic models for API
+class GenerateRequest(BaseModel):
+    url: str
+    settings: ClipSettings = ClipSettings()
+
+
+class GenerateResponse(BaseModel):
+    job_id: str
+    status: str
+    message: str
+
+
+class VideoInfoRequest(BaseModel):
+    url: str
+
+
+class VideoInfoResponse(BaseModel):
+    metadata: VideoMetadata
+    valid: bool
+
+
+# API Routes
+@app.get("/")
+async def root():
+    """Root endpoint"""
+    return {
+        "name": "AI Clipper API",
+        "version": "1.0.0",
+        "status": "running"
+    }
+
+
+@app.get("/health")
+async def health():
+    """Health check endpoint"""
+    return {
+        "status": "healthy",
+        "timestamp": datetime.utcnow().isoformat()
+    }
+
+
+@app.post("/api/video/info", response_model=VideoInfoResponse)
+async def get_video_info(request: VideoInfoRequest):
+    """Get video metadata without downloading"""
+    try:
+        metadata = downloader.get_video_info(request.url)
+        return VideoInfoResponse(metadata=metadata, valid=True)
+    except Exception as e:
+        logger.error(f"Failed to get video info: {e}")
+        return VideoInfoResponse(
+            metadata=VideoMetadata(
+                video_id="",
+                title="",
+                author="",
+                duration=0
+            ),
+            valid=False
+        )
+
+
+@app.post("/api/generate", response_model=GenerateResponse)
+async def generate_clips(request: GenerateRequest, background_tasks: BackgroundTasks):
+    """
+    Generate clips from YouTube video
+
+    This initiates an async background job that:
+    1. Downloads the video
+    2. Transcribes audio
+    3. Analyzes content with AI
+    4. Scores viral moments
+    5. Detects speakers
+    6. Generates clips
+    """
+    try:
+        # Validate URL
+        if not downloader.validate_url(request.url):
+            raise HTTPException(status_code=400, detail="Invalid YouTube URL")
+
+        # Create job ID
+        job_id = str(uuid.uuid4())
+
+        # Initialize job status
+        processing_jobs[job_id] = {
+            "status": "pending",
+            "url": request.url,
+            "settings": request.settings.dict(),
+            "created_at": datetime.utcnow(),
+            "progress": 0,
+            "clips": []
+        }
+
+        # Start background processing
+        background_tasks.add_task(
+            process_video_job,
+            job_id,
+            request.url,
+            request.settings
+        )
+
+        return GenerateResponse(
+            job_id=job_id,
+            status="started",
+            message="Video processing started"
+        )
+
+    except Exception as e:
+        logger.error(f"Failed to start generation: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/job/{job_id}")
+async def get_job_status(job_id: str):
+    """Get status of a processing job"""
+    if job_id not in processing_jobs:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    return processing_jobs[job_id]
+
+
+@app.get("/api/job/{job_id}/clips")
+async def get_job_clips(job_id: str):
+    """Get clips generated by a job"""
+    if job_id not in processing_jobs:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    return {
+        "clips": processing_jobs[job_id].get("clips", [])
+    }
+
+
+@app.post("/api/export")
+async def export_clips(request: ClipExport, background_tasks: BackgroundTasks):
+    """Export selected clips"""
+    job_id = str(uuid.uuid4())
+
+    background_tasks.add_task(export_clips_job, job_id, request)
+
+    return {
+        "job_id": job_id,
+        "status": "started",
+        "message": "Export started"
+    }
+
+
+@app.get("/api/cache/stats")
+async def get_cache_stats():
+    """Get cache statistics"""
+    return cache.get_cache_stats()
+
+
+@app.delete("/api/cache")
+async def clear_cache():
+    """Clear all cache"""
+    count = cache.clear_all()
+    return {
+        "message": f"Cleared {count} cache entries",
+        "count": count
+    }
+
+
+# WebSocket endpoint
+@app.websocket("/ws")
+async def websocket_endpoint(websocket: WebSocket):
+    """WebSocket for real-time progress updates"""
+    await websocket.accept()
+    active_connections.append(websocket)
+
+    try:
+        while True:
+            # Keep connection alive
+            data = await websocket.receive_text()
+            logger.debug(f"WebSocket received: {data}")
+
+    except WebSocketDisconnect:
+        active_connections.remove(websocket)
+        logger.info("WebSocket disconnected")
+
+
+# Helper functions
+async def broadcast_progress(job_id: str, progress: ProcessingProgress):
+    """Send progress update to all connected clients"""
+    message = {
+        "type": "progress",
+        "job_id": job_id,
+        "data": progress.dict()
+    }
+
+    for connection in active_connections:
+        try:
+            await connection.send_json(message)
+        except Exception as e:
+            logger.warning(f"Failed to send progress: {e}")
+
+
+async def broadcast_clip_generated(job_id: str, clip: Clip):
+    """Send new clip notification to all clients"""
+    message = {
+        "type": "clip_generated",
+        "job_id": job_id,
+        "data": clip.dict()
+    }
+
+    for connection in active_connections:
+        try:
+            await connection.send_json(message)
+        except Exception as e:
+            logger.warning(f"Failed to send clip: {e}")
+
+
+async def broadcast_complete(job_id: str, clips: List[Clip]):
+    """Send completion notification to all clients"""
+    message = {
+        "type": "complete",
+        "job_id": job_id,
+        "data": {
+            "clips": [clip.dict() for clip in clips]
+        }
+    }
+
+    for connection in active_connections:
+        try:
+            await connection.send_json(message)
+        except Exception as e:
+            logger.warning(f"Failed to send complete: {e}")
+
+
+async def process_video_job(
+    job_id: str,
+    url: str,
+    settings: ClipSettings
+):
+    """Main processing pipeline for video"""
+    try:
+        logger.info(f"Starting job {job_id}: {url}")
+
+        # Update job status
+        processing_jobs[job_id]["status"] = "downloading"
+        await broadcast_progress(
+            job_id,
+            ProcessingProgress(
+                stage="downloading",
+                progress=0,
+                message="Starting download..."
+            )
+        )
+
+        # Step 1: Get video info
+        metadata = downloader.get_video_info(url)
+
+        # Check cache
+        cached_transcription = cache.get_video_transcription(metadata.video_id)
+        cached_analysis = cache.get_video_analysis(metadata.video_id)
+
+        # Step 2: Download video
+        video_path = downloader.download(url, quality="720p")
+        processing_jobs[job_id]["video_path"] = video_path
+
+        await broadcast_progress(
+            job_id,
+            ProcessingProgress(
+                stage="downloading",
+                progress=100,
+                message="Download complete"
+            )
+        )
+
+        # Step 3: Transcribe
+        processing_jobs[job_id]["status"] = "transcribing"
+        await broadcast_progress(
+            job_id,
+            ProcessingProgress(
+                stage="transcribing",
+                progress=0,
+                message="Starting transcription..."
+            )
+        )
+
+        if cached_transcription:
+            transcription = Transcription(**cached_transcription)
+            logger.info("Using cached transcription")
+        else:
+            transcription = transcriber.transcribe_video(video_path)
+            cache.set_video_transcription(metadata.video_id, transcription.dict())
+
+        await broadcast_progress(
+            job_id,
+            ProcessingProgress(
+                stage="transcribing",
+                progress=100,
+                message="Transcription complete"
+            )
+        )
+
+        # Step 4: Analyze with AI
+        processing_jobs[job_id]["status"] = "analyzing"
+        await broadcast_progress(
+            job_id,
+            ProcessingProgress(
+                stage="analyzing",
+                progress=0,
+                message="Analyzing content..."
+            )
+        )
+
+        if cached_analysis:
+            analysis = ContentAnalysis(**cached_analysis)
+            logger.info("Using cached analysis")
+        else:
+            analysis = analyzer.analyze_transcription(transcription, metadata.title)
+            cache.set_video_analysis(metadata.video_id, analysis.dict())
+
+        await broadcast_progress(
+            job_id,
+            ProcessingProgress(
+                stage="analyzing",
+                progress=100,
+                message="Analysis complete"
+            )
+        )
+
+        # Step 5: Score viral moments
+        processing_jobs[job_id]["status"] = "scoring"
+        scored_moments = scorer.score_moments(transcription, analysis)
+
+        # Filter overlapping moments
+        filtered_moments = scorer.filter_overlapping_moments(scored_moments)
+
+        # Select top N clips
+        top_moments = filtered_moments[:settings.num_clips]
+
+        await broadcast_progress(
+            job_id,
+            ProcessingProgress(
+                stage="detecting",
+                progress=50,
+                message=f"Identified {len(top_moments)} viral moments"
+            )
+        )
+
+        # Step 6: Generate clips
+        processing_jobs[job_id]["status"] = "editing"
+        generated_clips = []
+
+        for idx, moment in enumerate(top_moments):
+            clip_start = moment.timestamp
+            clip_end = min(
+                clip_start + settings.clip_duration,
+                transcription.duration
+            )
+
+            await broadcast_progress(
+                job_id,
+                ProcessingProgress(
+                    stage="editing",
+                    progress=int((idx + 1) / len(top_moments) * 100),
+                    message=f"Generating clip {idx + 1}/{len(top_moments)}...",
+                    current_clip=idx + 1,
+                    total_clips=len(top_moments)
+                )
+            )
+
+            # Get transcription segment for this clip
+            clip_segments = [
+                seg for seg in transcription.segments
+                if seg.start >= clip_start and seg.end <= clip_end
+            ]
+            clip_transcription = Transcription(
+                text=" ".join([s.text for s in clip_segments]),
+                segments=clip_segments,
+                language=transcription.language,
+                duration=clip_end - clip_start
+            )
+
+            # Process clip
+            try:
+                final_clip_path = editor.process_clip(
+                    video_path,
+                    clip_start,
+                    clip_end,
+                    add_subtitles=True,
+                    transcription=clip_transcription,
+                    add_zoom=settings.zoom_effect,
+                    subtitle_style=settings.subtitle_style
+                )
+
+                # Generate thumbnail
+                thumbnail_path = editor.generate_thumbnail(
+                    final_clip_path,
+                    clip_start + (clip_end - clip_start) / 2
+                )
+
+                # Create clip object
+                clip = Clip(
+                    id=f"{job_id}_clip_{idx}",
+                    video_id=metadata.video_id,
+                    start_time=clip_start,
+                    end_time=clip_end,
+                    duration=clip_end - clip_start,
+                    score=moment.overall_score,
+                    title=f"Clip {idx + 1}: {moment.top_reasons[0] if moment.top_reasons else 'Great moment'}",
+                    description="\n".join(moment.top_reasons),
+                    video_path=final_clip_path,
+                    thumbnail_path=thumbnail_path,
+                    transcription=clip_transcription.text,
+                    enabled=True
+                )
+
+                generated_clips.append(clip)
+                await broadcast_clip_generated(job_id, clip)
+
+            except Exception as e:
+                logger.error(f"Failed to generate clip {idx}: {e}")
+                continue
+
+        # Complete
+        processing_jobs[job_id]["status"] = "completed"
+        processing_jobs[job_id]["clips"] = [clip.dict() for clip in generated_clips]
+        processing_jobs[job_id]["progress"] = 100
+
+        await broadcast_complete(job_id, generated_clips)
+
+        logger.info(f"Job {job_id} completed: {len(generated_clips)} clips generated")
+
+    except Exception as e:
+        logger.error(f"Job {job_id} failed: {e}")
+        processing_jobs[job_id]["status"] = "failed"
+        processing_jobs[job_id]["error"] = str(e)
+
+        # Send error notification
+        message = {
+            "type": "error",
+            "job_id": job_id,
+            "data": {
+                "error": str(e)
+            }
+        }
+
+        for connection in active_connections:
+            try:
+                await connection.send_json(message)
+            except Exception:
+                pass
+
+
+async def export_clips_job(job_id: str, request: ClipExport):
+    """Export selected clips"""
+    try:
+        logger.info(f"Exporting clips for job {job_id}: {request.clip_ids}")
+
+        exported_clips = []
+        total_size = 0
+
+        for clip_id in request.clip_ids:
+            # Find clip (in production, query from database)
+            # For now, check processing jobs
+            for job_data in processing_jobs.values():
+                clips = job_data.get("clips", [])
+                clip = next((c for c in clips if c["id"] == clip_id), None)
+
+                if clip and clip.get("video_path"):
+                    if os.path.exists(clip["video_path"]):
+                        file_size = os.path.getsize(clip["video_path"])
+                        total_size += file_size
+                        exported_clips.append(clip["video_path"])
+
+        result = ExportResult(
+            success=len(exported_clips) > 0,
+            exported_clips=exported_clips,
+            total_size_mb=round(total_size / (1024 * 1024), 2),
+            export_path=settings.PROCESSED_DIR
+        )
+
+        # Send completion notification
+        message = {
+            "type": "export_complete",
+            "job_id": job_id,
+            "data": result.dict()
+        }
+
+        for connection in active_connections:
+            try:
+                await connection.send_json(message)
+            except Exception:
+                pass
+
+        logger.info(f"Export complete: {len(exported_clips)} clips")
+
+    except Exception as e:
+        logger.error(f"Export failed: {e}")
+
+
+# Exception handlers
+@app.exception_handler(AIClipperError)
+async def ai_clipper_exception_handler(request, exc: AIClipperError):
+    """Handle custom exceptions"""
+    return JSONResponse(
+        status_code=400,
+        content={"error": str(exc)}
+    )
+
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(
+        "main:app",
+        host=settings.HOST,
+        port=settings.PORT,
+        reload=settings.DEBUG
+    )
