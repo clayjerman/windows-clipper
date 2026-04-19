@@ -4,10 +4,62 @@ import { ApiKeySetup } from './components/Onboarding';
 import { SettingsPanel } from './components/Settings';
 import { hasApiKeys } from './services/settingsStorage';
 import { useLog } from './hooks/useLog';
+import BackendSplash from './components/BackendSplash';
 
 const BACKEND = 'http://127.0.0.1:8000';
+const HEALTH_TIMEOUT_S = 40;
+
+function useBackendReady() {
+  const [ready, setReady] = useState(false);
+  const [timedOut, setTimedOut] = useState(false);
+  const [attempt, setAttempt] = useState(0);
+
+  const start = useCallback(() => {
+    setReady(false);
+    setTimedOut(false);
+    setAttempt((n) => n + 1);
+  }, []);
+
+  useEffect(() => {
+    if (attempt === 0) {
+      setAttempt(1); // kick off on mount
+      return;
+    }
+    let cancelled = false;
+    let tries = 0;
+
+    const poll = async () => {
+      while (!cancelled) {
+        try {
+          const res = await fetch(`${BACKEND}/health`, {
+            signal: AbortSignal.timeout(1500),
+          });
+          if (res.ok) {
+            if (!cancelled) setReady(true);
+            return;
+          }
+        } catch {
+          // backend not up yet
+        }
+        tries++;
+        if (tries >= HEALTH_TIMEOUT_S) {
+          if (!cancelled) setTimedOut(true);
+          return;
+        }
+        await new Promise((r) => setTimeout(r, 1000));
+      }
+    };
+
+    poll();
+    return () => { cancelled = true; };
+  }, [attempt]);
+
+  return { ready, timedOut, retry: start };
+}
 
 function App() {
+  const { ready: backendReady, timedOut, retry } = useBackendReady();
+
   const [showOnboarding, setShowOnboarding] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [isSetupComplete, setIsSetupComplete] = useState(false);
@@ -289,6 +341,11 @@ function App() {
 
   const selectAllClips = () => setSelectedClips(new Set(clips.map((c) => c.id as string)));
   const deselectAllClips = () => setSelectedClips(new Set<string>());
+
+  // Show backend startup screen until health check passes
+  if (!backendReady) {
+    return <BackendSplash timedOut={timedOut} onRetry={retry} />;
+  }
 
   if (showOnboarding) {
     return <ApiKeySetup onComplete={handleOnboardingComplete} />;

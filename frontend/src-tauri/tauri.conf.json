@@ -15,7 +15,14 @@
       "all": false,
       "shell": {
         "all": false,
-        "open": true
+        "open": true,
+        "sidecar": true,
+        "scope": [
+          {
+            "name": "ai-clipper-backend",
+            "sidecar": true
+          }
+        ]
       },
       "dialog": {
         "all": false,
@@ -63,7 +70,7 @@
       "deb": {
         "depends": []
       },
-      "externalBin": [],
+      "externalBin": ["binaries/ai-clipper-backend"],
       "macOS": {
         "entitlements": null,
         "exceptionDomain": "",
