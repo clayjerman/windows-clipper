@@ -6,6 +6,9 @@ on:
       - 'v*'
   workflow_dispatch:
 
+permissions:
+  contents: write   
+
 jobs:
   build:
     name: Build Windows Installer
@@ -151,7 +154,7 @@ jobs:
             - Smart viral scoring
             - Ready for TikTok, YouTube Shorts, and Instagram Reels
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GH_PAT }}
 
       - name: Notify build status
         if: always()
