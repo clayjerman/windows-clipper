@@ -1,6 +1,12 @@
-// Learn more about Tauri commands at https://tauri.app/v1/guides/features/command
+// lib.rs - Shared library module for AI Clipper
 
-#[tauri::command]
-fn greet(name: &str) -> String {
-    format!("Hello, {}! You've been greeted from Rust!", name)
+// Use this for shared functions and modules
+// Currently, the main application logic is in main.rs
+
+pub fn get_app_version() -> &'static str {
+    env!("CARGO_PKG_VERSION")
+}
+
+pub fn get_app_name() -> &'static str {
+    env!("CARGO_PKG_NAME")
 }
