@@ -6,7 +6,7 @@ import { hasApiKeys } from './services/settingsStorage';
 import { useLog } from './hooks/useLog';
 import BackendSplash from './components/BackendSplash';
 
-const BACKEND = 'http://127.0.0.1:8000';
+const BACKEND = 'http://127.0.0.1:58174';
 const HEALTH_TIMEOUT_S = 40;
 
 function useBackendReady() {
@@ -118,9 +118,9 @@ function App() {
     let ws: WebSocket;
 
     try {
-      ws = new WebSocket(`ws://127.0.0.1:8000/ws`);
+      ws = new WebSocket(`ws://127.0.0.1:58174/ws`);
     } catch {
-      const msg = 'Cannot connect to backend. Make sure the server is running on port 8000.';
+      const msg = 'Cannot connect to backend. Make sure the server is running on port 58174.';
       setCurrentStage('Error');
       setMessage(msg);
       setProcessing(false);
@@ -129,7 +129,7 @@ function App() {
     }
 
     ws.onerror = () => {
-      const msg = 'Cannot reach backend at 127.0.0.1:8000. Please start the server first.';
+      const msg = 'Cannot reach backend at 127.0.0.1:58174. Please start the server first.';
       setCurrentStage('Connection Error');
       setMessage(msg);
       setProcessing(false);
@@ -237,7 +237,7 @@ function App() {
 
     let ws: WebSocket;
     try {
-      ws = new WebSocket(`ws://127.0.0.1:8000/ws`);
+      ws = new WebSocket(`ws://127.0.0.1:58174/ws`);
     } catch {
       const msg = 'Cannot connect to backend.';
       setCurrentStage('Export Error');
@@ -248,7 +248,7 @@ function App() {
     }
 
     ws.onerror = () => {
-      const msg = 'Cannot reach backend at 127.0.0.1:8000.';
+      const msg = 'Cannot reach backend at 127.0.0.1:58174.';
       setCurrentStage('Export Error');
       setMessage(msg);
       setProcessing(false);
