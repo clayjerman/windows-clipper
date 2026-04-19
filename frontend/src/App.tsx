@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import MainLayout from './components/Layout/MainLayout';
 import { ApiKeySetup } from './components/Onboarding';
 import { SettingsPanel } from './components/Settings';
-import { hasApiKeys } from './services/settingsStorage';
+import { hasApiKeys, loadApiKeys } from './services/settingsStorage';
 import { useLog } from './hooks/useLog';
 import BackendSplash from './components/BackendSplash';
 
@@ -197,6 +197,7 @@ function App() {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             url,
+            gemini_api_key: loadApiKeys().geminiApiKey,
             settings: {
               clip_duration: 30,
               num_clips: 5,

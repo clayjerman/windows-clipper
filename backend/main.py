@@ -56,10 +56,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Global services
+# Global services (analyzer is created per-request with the user's API key)
 downloader = VideoDownloader()
 transcriber = Transcriber()
-analyzer = ContentAnalyzer()
 scorer = ViralScorer()
 mouth_tracker = MouthTracker()
 editor = VideoEditor()
@@ -76,6 +75,7 @@ processing_jobs = {}
 class GenerateRequest(BaseModel):
     url: str
     settings: ClipSettings = ClipSettings()
+    gemini_api_key: str = ""
 
 
 class GenerateResponse(BaseModel):
@@ -169,6 +169,7 @@ async def generate_clips(request: GenerateRequest, background_tasks: BackgroundT
             job_id,
             request.url,
             request.settings,
+            request.gemini_api_key,
         )
 
         return GenerateResponse(
@@ -334,6 +335,7 @@ async def process_video_job(
     job_id: str,
     url: str,
     clip_settings: ClipSettings,
+    gemini_api_key: str = "",
 ):
     """
     Main video-processing pipeline.
@@ -404,6 +406,13 @@ async def process_video_job(
         # ── Step 3: Analyse ───────────────────────────────────────────────────
         processing_jobs[job_id]["status"] = "analyzing"
         await _progress("analyzing", 0, "Analysing content with AI…")
+
+        api_key = gemini_api_key or settings.GEMINI_API_KEY
+        if not api_key:
+            await _error("Gemini API key not configured. Please add it in Settings.")
+            return
+
+        analyzer = ContentAnalyzer(api_key=api_key)
 
         cached_analysis = cache.get_video_analysis(metadata.video_id)
         if cached_analysis:
