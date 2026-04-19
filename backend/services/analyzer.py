@@ -5,7 +5,8 @@ import os
 import logging
 import json
 from typing import List, Dict, Optional
-import google.generativeai as genai
+from google import genai
+from google.genai import types as genai_types
 
 from ..core.config import settings
 from ..core.exceptions import AnalysisError
@@ -35,8 +36,8 @@ class ContentAnalyzer:
         if not self.api_key:
             raise AnalysisError("Gemini API key not configured")
 
-        genai.configure(api_key=self.api_key)
-        self.model = genai.GenerativeModel(settings.GEMINI_MODEL)
+        self.client = genai.Client(api_key=self.api_key)
+        self.model_name = settings.GEMINI_MODEL
 
         logger.info("Gemini analyzer initialized")
 
@@ -62,7 +63,9 @@ class ContentAnalyzer:
             prompt = self._build_analysis_prompt(transcription, video_title)
 
             # Get analysis from Gemini
-            response = self.model.generate_content(prompt)
+            response = self.client.models.generate_content(
+                model=self.model_name, contents=prompt
+            )
             analysis_text = response.text
 
             # Parse response
@@ -220,7 +223,9 @@ Make it:
 
 Return ONLY the hook text, no quotes or extra text."""
 
-            response = self.model.generate_content(prompt)
+            response = self.client.models.generate_content(
+                model=self.model_name, contents=prompt
+            )
             hook = response.text.strip().strip('"')
 
             return hook

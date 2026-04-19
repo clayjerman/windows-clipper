@@ -63,11 +63,16 @@ a = Analysis(
         "backend.utils.file_utils",
         "backend.utils.video_utils",
         "backend.utils.audio_utils",
+        # google-genai SDK
+        "google.genai",
+        "google.genai.types",
+        # mediapipe transitive deps
+        "matplotlib",
+        "matplotlib.pyplot",
     ],
     hookspath=[],
     runtime_hooks=[],
     excludes=[
-        "matplotlib",
         "tkinter",
         "PyQt5",
         "PyQt6",
