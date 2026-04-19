@@ -1,11 +1,10 @@
-import { useState } from 'react';
-import { Grid, List, Filter, ChevronDown } from 'lucide-react';
+import { Grid } from 'lucide-react';
 import ClipCard from './ClipCard';
 
 interface ClipListProps {
   clips: any[];
-  selectedClips: Set<number>;
-  toggleClipSelection: (id: number) => void;
+  selectedClips: Set<string>;
+  toggleClipSelection: (id: string) => void;
   viewMode: 'grid' | 'list';
   selectedClip: any;
   setSelectedClip: (clip: any) => void;
@@ -17,10 +16,8 @@ export default function ClipList({
   toggleClipSelection,
   viewMode,
   selectedClip,
-  setSelectedClip
+  setSelectedClip,
 }: ClipListProps) {
-  const [sortBy, setSortBy] = useState('score');
-
   return (
     <div className="space-y-3">
       {/* Statistics Bar */}
@@ -45,14 +42,6 @@ export default function ClipList({
             </p>
           </div>
         </div>
-
-        <div className="flex items-center gap-2">
-          <button className="flex items-center gap-1 px-2 py-1.5 rounded bg-white/5 text-gray-400 hover:text-white hover:bg-white/10 transition-colors text-sm">
-            <Filter className="w-3 h-3" />
-            <span>{sortBy === 'score' ? 'Score' : sortBy === 'duration' ? 'Duration' : 'Latest'}</span>
-            <ChevronDown className="w-3 h-3" />
-          </button>
-        </div>
       </div>
 
       {/* Clips */}
@@ -62,9 +51,7 @@ export default function ClipList({
             <Grid className="w-8 h-8 text-gray-600" />
           </div>
           <p className="text-gray-400 mb-2">No clips generated yet</p>
-          <p className="text-sm text-gray-500">
-            Paste a YouTube URL and click "Generate Clips"
-          </p>
+          <p className="text-sm text-gray-500">Paste a YouTube URL and click "Generate Clips"</p>
         </div>
       ) : viewMode === 'grid' ? (
         <div className="grid grid-cols-2 gap-3">

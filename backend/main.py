@@ -10,7 +10,7 @@ import uuid
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, FileResponse
 from pydantic import BaseModel
 
 from .core.config import settings
@@ -168,7 +168,7 @@ async def generate_clips(request: GenerateRequest, background_tasks: BackgroundT
             process_video_job,
             job_id,
             request.url,
-            request.settings
+            request.settings,
         )
 
         return GenerateResponse(
@@ -214,6 +214,38 @@ async def export_clips(request: ClipExport, background_tasks: BackgroundTasks):
         "status": "started",
         "message": "Export started"
     }
+
+
+@app.get("/api/clips/{clip_id}/video")
+async def get_clip_video(clip_id: str):
+    """Stream a generated clip video file"""
+    for job_data in processing_jobs.values():
+        clips = job_data.get("clips", [])
+        clip = next((c for c in clips if c["id"] == clip_id), None)
+        if clip and clip.get("video_path") and os.path.exists(clip["video_path"]):
+            return FileResponse(
+                clip["video_path"],
+                media_type="video/mp4",
+                headers={"Accept-Ranges": "bytes"},
+            )
+    raise HTTPException(status_code=404, detail="Clip not found")
+
+
+@app.get("/api/clips/{clip_id}/thumbnail")
+async def get_clip_thumbnail(clip_id: str):
+    """Return thumbnail image for a clip"""
+    for job_data in processing_jobs.values():
+        clips = job_data.get("clips", [])
+        clip = next((c for c in clips if c["id"] == clip_id), None)
+        if clip and clip.get("thumbnail_path") and os.path.exists(clip["thumbnail_path"]):
+            return FileResponse(clip["thumbnail_path"], media_type="image/jpeg")
+    raise HTTPException(status_code=404, detail="Thumbnail not found")
+
+
+@app.get("/api/export/directory")
+async def get_export_directory():
+    """Return the directory where processed clips are saved"""
+    return {"path": settings.PROCESSED_DIR}
 
 
 @app.get("/api/cache/stats")
@@ -301,219 +333,188 @@ async def broadcast_complete(job_id: str, clips: List[Clip]):
 async def process_video_job(
     job_id: str,
     url: str,
-    settings: ClipSettings
+    clip_settings: ClipSettings,
 ):
-    """Main processing pipeline for video"""
-    try:
-        logger.info(f"Starting job {job_id}: {url}")
+    """
+    Main video-processing pipeline.
 
-        # Update job status
-        processing_jobs[job_id]["status"] = "downloading"
+    Improvements vs. original:
+    - Async download with live progress broadcast
+    - In-process metadata cache (lru_cache in downloader)
+    - Parallel clip rendering via asyncio + ThreadPoolExecutor
+    - All per-clip FFmpeg work runs in a single pass (editor.process_clip)
+    """
+    loop = asyncio.get_event_loop()
+
+    async def _progress(stage: str, pct: int, msg: str, **kw):
         await broadcast_progress(
             job_id,
-            ProcessingProgress(
-                stage="downloading",
-                progress=0,
-                message="Starting download..."
-            )
+            ProcessingProgress(stage=stage, progress=pct, message=msg, **kw),
         )
 
-        # Step 1: Get video info
+    async def _error(msg: str):
+        processing_jobs[job_id]["status"] = "failed"
+        processing_jobs[job_id]["error"] = msg
+        for conn in list(active_connections):
+            try:
+                await conn.send_json({"type": "error", "job_id": job_id, "data": {"error": msg}})
+            except Exception:
+                pass
+
+    try:
+        logger.info(f"Job {job_id} started: {url}")
+        processing_jobs[job_id]["status"] = "downloading"
+
+        # ── Step 1: Download ──────────────────────────────────────────────────
+        await _progress("downloading", 0, "Fetching video info…")
         metadata = downloader.get_video_info(url)
 
-        # Check cache
-        cached_transcription = cache.get_video_transcription(metadata.video_id)
-        cached_analysis = cache.get_video_analysis(metadata.video_id)
+        last_pct: list[int] = [0]
 
-        # Step 2: Download video
-        video_path = downloader.download(url, quality="720p")
+        def _dl_progress(message: str, pct: int):
+            if pct != last_pct[0]:
+                last_pct[0] = pct
+                # schedule coroutine from thread
+                asyncio.run_coroutine_threadsafe(
+                    _progress("downloading", pct, message),
+                    loop,
+                )
+
+        quality = "720p" if clip_settings.output_resolution <= 720 else "1080p"
+        video_path = await downloader.download_async(url, quality=quality, progress_callback=_dl_progress)
         processing_jobs[job_id]["video_path"] = video_path
+        await _progress("downloading", 100, "Download complete")
 
-        await broadcast_progress(
-            job_id,
-            ProcessingProgress(
-                stage="downloading",
-                progress=100,
-                message="Download complete"
-            )
-        )
-
-        # Step 3: Transcribe
+        # ── Step 2: Transcribe ────────────────────────────────────────────────
         processing_jobs[job_id]["status"] = "transcribing"
-        await broadcast_progress(
-            job_id,
-            ProcessingProgress(
-                stage="transcribing",
-                progress=0,
-                message="Starting transcription..."
-            )
-        )
+        await _progress("transcribing", 0, "Starting transcription…")
 
+        cached_transcription = cache.get_video_transcription(metadata.video_id)
         if cached_transcription:
             transcription = Transcription(**cached_transcription)
             logger.info("Using cached transcription")
         else:
-            transcription = transcriber.transcribe_video(video_path)
+            transcription = await loop.run_in_executor(
+                None, transcriber.transcribe_video, video_path
+            )
             cache.set_video_transcription(metadata.video_id, transcription.dict())
 
-        await broadcast_progress(
-            job_id,
-            ProcessingProgress(
-                stage="transcribing",
-                progress=100,
-                message="Transcription complete"
-            )
-        )
+        await _progress("transcribing", 100, "Transcription complete")
 
-        # Step 4: Analyze with AI
+        # ── Step 3: Analyse ───────────────────────────────────────────────────
         processing_jobs[job_id]["status"] = "analyzing"
-        await broadcast_progress(
-            job_id,
-            ProcessingProgress(
-                stage="analyzing",
-                progress=0,
-                message="Analyzing content..."
-            )
-        )
+        await _progress("analyzing", 0, "Analysing content with AI…")
 
+        cached_analysis = cache.get_video_analysis(metadata.video_id)
         if cached_analysis:
             analysis = ContentAnalysis(**cached_analysis)
             logger.info("Using cached analysis")
         else:
-            analysis = analyzer.analyze_transcription(transcription, metadata.title)
+            analysis = await loop.run_in_executor(
+                None, analyzer.analyze_transcription, transcription, metadata.title
+            )
             cache.set_video_analysis(metadata.video_id, analysis.dict())
 
-        await broadcast_progress(
-            job_id,
-            ProcessingProgress(
-                stage="analyzing",
-                progress=100,
-                message="Analysis complete"
-            )
-        )
+        await _progress("analyzing", 100, "Analysis complete")
 
-        # Step 5: Score viral moments
+        # ── Step 4: Score & select moments ────────────────────────────────────
         processing_jobs[job_id]["status"] = "scoring"
         scored_moments = scorer.score_moments(transcription, analysis)
-
-        # Filter overlapping moments
         filtered_moments = scorer.filter_overlapping_moments(scored_moments)
-
-        # Select top N clips
-        top_moments = filtered_moments[:settings.num_clips]
-
-        await broadcast_progress(
-            job_id,
-            ProcessingProgress(
-                stage="detecting",
-                progress=50,
-                message=f"Identified {len(top_moments)} viral moments"
-            )
+        top_moments = filtered_moments[: clip_settings.num_clips]
+        await _progress(
+            "detecting", 100,
+            f"Identified {len(top_moments)} viral moment(s)",
         )
 
-        # Step 6: Generate clips
+        # ── Step 5: Render clips in parallel ─────────────────────────────────
         processing_jobs[job_id]["status"] = "editing"
-        generated_clips = []
+        total = len(top_moments)
+        done_count = [0]  # mutable counter shared with callbacks
+        generated_clips: list[Clip] = []
 
-        for idx, moment in enumerate(top_moments):
+        def _render_clip(idx: int, moment) -> Optional[Clip]:
             clip_start = moment.timestamp
-            clip_end = min(
-                clip_start + settings.clip_duration,
-                transcription.duration
-            )
+            clip_end = min(clip_start + clip_settings.clip_duration, transcription.duration)
 
-            await broadcast_progress(
-                job_id,
-                ProcessingProgress(
-                    stage="editing",
-                    progress=int((idx + 1) / len(top_moments) * 100),
-                    message=f"Generating clip {idx + 1}/{len(top_moments)}...",
-                    current_clip=idx + 1,
-                    total_clips=len(top_moments)
-                )
-            )
-
-            # Get transcription segment for this clip
             clip_segments = [
                 seg for seg in transcription.segments
                 if seg.start >= clip_start and seg.end <= clip_end
             ]
             clip_transcription = Transcription(
-                text=" ".join([s.text for s in clip_segments]),
+                text=" ".join(s.text for s in clip_segments),
                 segments=clip_segments,
                 language=transcription.language,
-                duration=clip_end - clip_start
+                duration=clip_end - clip_start,
             )
 
-            # Process clip
             try:
                 final_clip_path = editor.process_clip(
                     video_path,
                     clip_start,
                     clip_end,
-                    add_subtitles=True,
                     transcription=clip_transcription,
-                    add_zoom=settings.zoom_effect,
-                    subtitle_style=settings.subtitle_style
+                    settings_obj=clip_settings,
+                    add_subtitles=True,
                 )
-
-                # Generate thumbnail
                 thumbnail_path = editor.generate_thumbnail(
                     final_clip_path,
-                    clip_start + (clip_end - clip_start) / 2
+                    clip_start + (clip_end - clip_start) / 2,
                 )
-
-                # Create clip object
-                clip = Clip(
+                reasons = getattr(moment, "top_reasons", []) or [getattr(moment, "reason", "")]
+                return Clip(
                     id=f"{job_id}_clip_{idx}",
                     video_id=metadata.video_id,
                     start_time=clip_start,
                     end_time=clip_end,
                     duration=clip_end - clip_start,
-                    score=moment.overall_score,
-                    title=f"Clip {idx + 1}: {moment.top_reasons[0] if moment.top_reasons else 'Great moment'}",
-                    description="\n".join(moment.top_reasons),
+                    score=getattr(moment, "overall_score", 0) or getattr(moment, "score", 0),
+                    title=f"Clip {idx + 1}: {reasons[0] if reasons else 'Great moment'}",
+                    description="\n".join(reasons),
                     video_path=final_clip_path,
                     thumbnail_path=thumbnail_path,
                     transcription=clip_transcription.text,
-                    enabled=True
+                    enabled=True,
+                    status="ready",
                 )
+            except Exception as exc:
+                logger.error(f"Clip {idx} render failed: {exc}")
+                return None
 
+        # Run renders concurrently (I/O-bound FFmpeg subprocess)
+        futures = [
+            loop.run_in_executor(None, _render_clip, idx, moment)
+            for idx, moment in enumerate(top_moments)
+        ]
+
+        for coro in asyncio.as_completed(futures):
+            clip: Optional[Clip] = await coro
+            done_count[0] += 1
+            pct = int(done_count[0] * 100 / total)
+            if clip is not None:
                 generated_clips.append(clip)
                 await broadcast_clip_generated(job_id, clip)
+            await _progress(
+                "editing", pct,
+                f"Rendered {done_count[0]}/{total} clip(s)…",
+                current_clip=done_count[0],
+                total_clips=total,
+            )
 
-            except Exception as e:
-                logger.error(f"Failed to generate clip {idx}: {e}")
-                continue
+        # Sort by score descending so frontend receives them ranked
+        generated_clips.sort(
+            key=lambda c: getattr(c, "score", 0), reverse=True
+        )
 
-        # Complete
         processing_jobs[job_id]["status"] = "completed"
-        processing_jobs[job_id]["clips"] = [clip.dict() for clip in generated_clips]
+        processing_jobs[job_id]["clips"] = [c.dict() for c in generated_clips]
         processing_jobs[job_id]["progress"] = 100
-
         await broadcast_complete(job_id, generated_clips)
+        logger.info(f"Job {job_id} done: {len(generated_clips)}/{total} clip(s)")
 
-        logger.info(f"Job {job_id} completed: {len(generated_clips)} clips generated")
-
-    except Exception as e:
-        logger.error(f"Job {job_id} failed: {e}")
-        processing_jobs[job_id]["status"] = "failed"
-        processing_jobs[job_id]["error"] = str(e)
-
-        # Send error notification
-        message = {
-            "type": "error",
-            "job_id": job_id,
-            "data": {
-                "error": str(e)
-            }
-        }
-
-        for connection in active_connections:
-            try:
-                await connection.send_json(message)
-            except Exception:
-                pass
+    except Exception as exc:
+        logger.exception(f"Job {job_id} failed")
+        await _error(str(exc))
 
 
 async def export_clips_job(job_id: str, request: ClipExport):

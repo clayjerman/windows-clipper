@@ -1,8 +1,10 @@
 import { useState } from 'react';
-import { Settings as SettingsIcon } from 'lucide-react';
+import { Settings as SettingsIcon, ScrollText } from 'lucide-react';
 import LeftPanel from './LeftPanel';
 import CenterPanel from './CenterPanel';
 import RightPanel from './RightPanel';
+import LogPanel from '../Log/LogPanel';
+import type { LogEntry } from '../../hooks/useLog';
 
 interface MainLayoutProps {
   url: string;
@@ -14,11 +16,17 @@ interface MainLayoutProps {
   progress: number;
   message: string;
   clips: any[];
-  selectedClips: Set<number>;
-  toggleClipSelection: (id: number) => void;
+  selectedClips: Set<string>;
+  toggleClipSelection: (id: string) => void;
+  selectAllClips: () => void;
+  deselectAllClips: () => void;
   handleGenerate: () => void;
   handleExport: () => void;
   onOpenSettings: () => void;
+  logEntries: LogEntry[];
+  logUnread: number;
+  onClearLog: () => void;
+  onMarkLogRead: () => void;
 }
 
 export default function MainLayout({
@@ -33,28 +41,24 @@ export default function MainLayout({
   clips,
   selectedClips,
   toggleClipSelection,
+  selectAllClips,
+  deselectAllClips,
   handleGenerate,
   handleExport,
   onOpenSettings,
+  logEntries,
+  logUnread,
+  onClearLog,
+  onMarkLogRead,
 }: MainLayoutProps) {
   const [selectedClip, setSelectedClip] = useState<any>(null);
-  const [processingState, setProcessingState] = useState(processing);
-  const [currentStageState, setCurrentStage] = useState(currentStage);
-  const [progressState, setProgressState] = useState(progress);
-  const [messageState, setMessageState] = useState(message);
+  const [showLog, setShowLog] = useState(false);
 
-  // Update state when props change
-  if (processingState !== processing) setProcessingState(processing);
-  if (currentStageState !== currentStage) setCurrentStage(currentStage);
-  if (progressState !== progress) setProgressState(progress);
-  if (messageState !== message) setMessageState(message);
-
-  const handleGenerateClick = () => {
-    handleGenerate();
-  };
-
-  const handleExportClick = () => {
-    handleExport();
+  const toggleLog = () => {
+    setShowLog((v) => {
+      if (!v) onMarkLogRead();
+      return !v;
+    });
   };
 
   return (
@@ -86,14 +90,35 @@ export default function MainLayout({
           <h1 className="text-lg font-bold text-white">AI Clipper</h1>
         </div>
 
-        <button
-          onClick={onOpenSettings}
-          className="flex items-center gap-2 px-3 py-2 rounded-lg hover:bg-white/5 transition-colors text-gray-300 hover:text-white"
-          title="Settings"
-        >
-          <SettingsIcon className="w-5 h-5" />
-          <span className="text-sm">Settings</span>
-        </button>
+        <div className="flex items-center gap-1">
+          {/* Log button */}
+          <button
+            onClick={toggleLog}
+            title="Activity log"
+            className={`relative p-2 rounded-lg transition-colors ${
+              showLog
+                ? 'bg-white/10 text-white'
+                : 'text-gray-500 hover:text-gray-300 hover:bg-white/5'
+            }`}
+          >
+            <ScrollText className="w-4 h-4" />
+            {logUnread > 0 && (
+              <span className="absolute -top-0.5 -right-0.5 min-w-[14px] h-[14px] px-[3px] rounded-full bg-[#8B5CF6] text-white text-[9px] font-bold flex items-center justify-center leading-none">
+                {logUnread > 99 ? '99+' : logUnread}
+              </span>
+            )}
+          </button>
+
+          {/* Settings button */}
+          <button
+            onClick={onOpenSettings}
+            className="flex items-center gap-2 px-3 py-2 rounded-lg hover:bg-white/5 transition-colors text-gray-300 hover:text-white"
+            title="Settings"
+          >
+            <SettingsIcon className="w-5 h-5" />
+            <span className="text-sm">Settings</span>
+          </button>
+        </div>
       </header>
 
       {/* Main Content */}
@@ -103,19 +128,19 @@ export default function MainLayout({
           setUrl={setUrl}
           setIsUrlValid={setIsUrlValid}
           isUrlValid={isUrlValid}
-          processing={processingState}
+          processing={processing}
           setProcessing={() => {}}
-          currentStage={currentStageState}
-          progress={progressState}
-          handleGenerate={handleGenerateClick}
+          currentStage={currentStage}
+          progress={progress}
+          handleGenerate={handleGenerate}
         />
 
         <CenterPanel
           url={url}
-          processing={processingState}
-          currentStage={currentStageState}
-          progress={progressState}
-          message={messageState}
+          processing={processing}
+          currentStage={currentStage}
+          progress={progress}
+          message={message}
           selectedClip={selectedClip}
           setSelectedClip={setSelectedClip}
         />
@@ -124,12 +149,23 @@ export default function MainLayout({
           clips={clips}
           selectedClips={selectedClips}
           toggleClipSelection={toggleClipSelection}
-          handleExport={handleExportClick}
-          processing={processingState}
+          selectAllClips={selectAllClips}
+          deselectAllClips={deselectAllClips}
+          handleExport={handleExport}
+          processing={processing}
           selectedClip={selectedClip}
           setSelectedClip={setSelectedClip}
         />
       </div>
+
+      {/* Log Panel overlay */}
+      {showLog && (
+        <LogPanel
+          entries={logEntries}
+          onClose={() => setShowLog(false)}
+          onClear={onClearLog}
+        />
+      )}
     </div>
   );
 }

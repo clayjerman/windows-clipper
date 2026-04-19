@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Play, Check, Star, Clock, Flame } from 'lucide-react';
+import { Play, Check, Clock, Flame } from 'lucide-react';
 
 interface ClipCardProps {
   clip: any;
@@ -19,6 +19,7 @@ export default function ClipCard({
   listView = false,
 }: ClipCardProps) {
   const [hovered, setHovered] = useState(false);
+  const [thumbError, setThumbError] = useState(false);
 
   const getScoreColor = (score: number): string => {
     if (score >= 90) return 'text-green-400';
@@ -31,6 +32,8 @@ export default function ClipCard({
     if (score >= 70) return 'Good';
     return 'Fair';
   };
+
+  const hasThumbnail = clip.thumbnail && !thumbError;
 
   if (listView) {
     return (
@@ -53,7 +56,7 @@ export default function ClipCard({
               e.stopPropagation();
               toggleSelection();
             }}
-            className={`w-5 h-5 rounded border-2 flex items-center justify-center transition-colors ${
+            className={`w-5 h-5 rounded border-2 flex items-center justify-center transition-colors flex-shrink-0 ${
               selected
                 ? 'bg-[#8B5CF6] border-[#8B5CF6]'
                 : 'border-gray-600 hover:border-gray-500'
@@ -63,10 +66,19 @@ export default function ClipCard({
           </button>
 
           {/* Thumbnail */}
-          <div className="w-24 h-14 bg-[#1A1A1D] rounded flex items-center justify-center relative overflow-hidden group">
-            <Play className="w-6 h-6 text-white/50 group-hover:text-white/80 transition-colors" />
+          <div className="w-24 h-14 bg-[#1A1A1D] rounded flex items-center justify-center relative overflow-hidden group flex-shrink-0">
+            {hasThumbnail ? (
+              <img
+                src={clip.thumbnail}
+                alt={clip.title}
+                className="w-full h-full object-cover"
+                onError={() => setThumbError(true)}
+              />
+            ) : (
+              <Play className="w-6 h-6 text-white/50 group-hover:text-white/80 transition-colors" />
+            )}
             {hovered && (
-              <div className="absolute inset-0 bg-black/40 flex items-center justify-center">
+              <div className="absolute inset-0 bg-black/50 flex items-center justify-center">
                 <Play className="w-8 h-8 text-white" />
               </div>
             )}
@@ -88,7 +100,7 @@ export default function ClipCard({
           </div>
 
           {/* Score Badge */}
-          <div className={`px-3 py-1 rounded-full text-xs font-bold ${getScoreColor(clip.score)}`}>
+          <div className={`px-3 py-1 rounded-full text-xs font-bold flex-shrink-0 ${getScoreColor(clip.score)}`}>
             {clip.score}
           </div>
         </div>
@@ -111,12 +123,21 @@ export default function ClipCard({
     >
       {/* Thumbnail */}
       <div className="aspect-[9/16] bg-[#1A1A1D] flex items-center justify-center relative overflow-hidden">
-        <Play className="w-12 h-12 text-white/30 group-hover:text-white/50 transition-colors" />
+        {hasThumbnail ? (
+          <img
+            src={clip.thumbnail}
+            alt={clip.title}
+            className="w-full h-full object-cover"
+            onError={() => setThumbError(true)}
+          />
+        ) : (
+          <Play className="w-12 h-12 text-white/30 group-hover:text-white/50 transition-colors" />
+        )}
 
         {/* Hover Overlay */}
         {hovered && (
           <div className="absolute inset-0 bg-black/50 flex items-center justify-center">
-            <Play className="w-16 h-16 text-white" />
+            <Play className="w-16 h-16 text-white drop-shadow-lg" />
           </div>
         )}
 

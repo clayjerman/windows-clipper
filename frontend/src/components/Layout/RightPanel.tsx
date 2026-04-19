@@ -4,8 +4,10 @@ import ClipList from '../Clips/ClipList';
 
 interface RightPanelProps {
   clips: any[];
-  selectedClips: Set<number>;
-  toggleClipSelection: (id: number) => void;
+  selectedClips: Set<string>;
+  toggleClipSelection: (id: string) => void;
+  selectAllClips: () => void;
+  deselectAllClips: () => void;
   handleExport: () => void;
   processing: boolean;
   selectedClip: any;
@@ -16,15 +18,17 @@ export default function RightPanel({
   clips,
   selectedClips,
   toggleClipSelection,
+  selectAllClips,
+  deselectAllClips,
   handleExport,
   processing,
   selectedClip,
-  setSelectedClip
+  setSelectedClip,
 }: RightPanelProps) {
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
-  const [sortBy, setSortBy] = useState('score');
 
   const selectedCount = selectedClips.size;
+  const allSelected = clips.length > 0 && selectedCount === clips.length;
   const canExport = selectedCount > 0 && !processing;
 
   return (
@@ -95,18 +99,11 @@ export default function RightPanel({
               <input
                 type="checkbox"
                 id="selectAll"
-                checked={selectedCount === clips.length && clips.length > 0}
-                onChange={() => {
-                  // Select/deselect all logic
-                  if (selectedCount === clips.length) {
-                    clips.forEach(clip => toggleClipSelection(clip.id));
-                  } else {
-                    clips.forEach(clip => toggleClipSelection(clip.id));
-                  }
-                }}
+                checked={allSelected}
+                onChange={() => (allSelected ? deselectAllClips() : selectAllClips())}
                 className="w-4 h-4 rounded border-gray-600 bg-[#0D0D0F] text-[#8B5CF6] focus:ring-[#8B5CF6]"
               />
-              <label htmlFor="selectAll" className="text-sm text-gray-300">
+              <label htmlFor="selectAll" className="text-sm text-gray-300 cursor-pointer">
                 Select All ({selectedCount}/{clips.length})
               </label>
             </div>

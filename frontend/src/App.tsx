@@ -1,15 +1,17 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import MainLayout from './components/Layout/MainLayout';
 import { ApiKeySetup } from './components/Onboarding';
 import { SettingsPanel } from './components/Settings';
 import { hasApiKeys } from './services/settingsStorage';
+import { useLog } from './hooks/useLog';
+
+const BACKEND = 'http://127.0.0.1:8000';
 
 function App() {
   const [showOnboarding, setShowOnboarding] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [isSetupComplete, setIsSetupComplete] = useState(false);
 
-  // State for video processing
   const [url, setUrl] = useState('');
   const [isUrlValid, setIsUrlValid] = useState(false);
   const [processing, setProcessing] = useState(false);
@@ -17,11 +19,11 @@ function App() {
   const [progress, setProgress] = useState(0);
   const [message, setMessage] = useState('');
 
-  // State for clips
   const [clips, setClips] = useState<any[]>([]);
-  const [selectedClips, setSelectedClips] = useState<Set<number>>(new Set());
+  const [selectedClips, setSelectedClips] = useState<Set<string>>(new Set());
 
-  // Check if user has set up API keys
+  const { entries: logEntries, unread: logUnread, addLog, clearLog, markRead } = useLog();
+
   useEffect(() => {
     const hasKeys = hasApiKeys();
     setShowOnboarding(!hasKeys);
@@ -35,55 +37,247 @@ function App() {
 
   const handleSettingsClose = () => {
     setShowSettings(false);
-    // Re-check API keys status after settings close
     const hasKeys = hasApiKeys();
     if (!hasKeys && isSetupComplete) {
       setShowOnboarding(true);
     }
   };
 
-  const handleGenerate = () => {
+  const handleGenerate = useCallback(async () => {
     if (!isUrlValid) return;
+
     setProcessing(true);
-    setCurrentStage('Downloading video...');
-    setProgress(10);
-    setMessage('Fetching video from YouTube...');
+    setCurrentStage('Connecting...');
+    setProgress(0);
+    setMessage('Connecting to backend...');
+    setClips([]);
+    setSelectedClips(new Set());
+    addLog('info', `Starting generation for: ${url}`);
 
-    // Simulate processing
-    setTimeout(() => {
-      setCurrentStage('Transcribing audio...');
-      setProgress(30);
-      setMessage('Converting speech to text...');
+    const stageLabels: Record<string, string> = {
+      downloading: 'Downloading video...',
+      transcribing: 'Transcribing audio...',
+      analyzing: 'Analyzing content...',
+      scoring: 'Scoring viral moments...',
+      detecting: 'Detecting speakers...',
+      editing: 'Generating clips...',
+    };
 
-      setTimeout(() => {
-        setCurrentStage('Analyzing content...');
-        setProgress(60);
-        setMessage('Identifying viral moments...');
+    let ws: WebSocket;
 
-        setTimeout(() => {
-          setCurrentStage('Generating clips...');
-          setProgress(85);
-          setMessage('Creating video clips...');
+    try {
+      ws = new WebSocket(`ws://127.0.0.1:8000/ws`);
+    } catch {
+      const msg = 'Cannot connect to backend. Make sure the server is running on port 8000.';
+      setCurrentStage('Error');
+      setMessage(msg);
+      setProcessing(false);
+      addLog('error', msg);
+      return;
+    }
 
-          // Add some dummy clips
-          setClips([
-            { id: 1, title: 'Viral Moment 1', duration: 30, score: 95, thumbnail: '' },
-            { id: 2, title: 'Viral Moment 2', duration: 30, score: 88, thumbnail: '' },
-            { id: 3, title: 'Viral Moment 3', duration: 30, score: 82, thumbnail: '' },
+    ws.onerror = () => {
+      const msg = 'Cannot reach backend at 127.0.0.1:8000. Please start the server first.';
+      setCurrentStage('Connection Error');
+      setMessage(msg);
+      setProcessing(false);
+      addLog('error', msg);
+    };
+
+    ws.onmessage = (event) => {
+      try {
+        const msg = JSON.parse(event.data);
+
+        if (msg.type === 'progress') {
+          const data = msg.data;
+          const label = stageLabels[data.stage] || data.stage;
+          setCurrentStage(label);
+          setProgress(data.progress ?? 0);
+          setMessage(data.message || '');
+          if (data.progress === 0 || data.progress === 100) {
+            addLog('info', `[${label}] ${data.message || ''}`);
+          }
+        } else if (msg.type === 'clip_generated') {
+          const clip = msg.data;
+          const score = clip.score > 10 ? Math.round(clip.score) : Math.round(clip.score * 10);
+          setClips((prev) => [
+            ...prev,
+            {
+              id: clip.id,
+              title: clip.title,
+              duration: Math.round(clip.duration),
+              score,
+              thumbnail: `${BACKEND}/api/clips/${clip.id}/thumbnail`,
+              videoUrl: `${BACKEND}/api/clips/${clip.id}/video`,
+              description: clip.description,
+            },
           ]);
+          addLog('success', `Clip generated: "${clip.title}" (score: ${score}%)`);
+        } else if (msg.type === 'complete') {
+          setCurrentStage('Complete!');
+          setProgress(100);
+          setMessage('Your clips are ready! Click a clip to preview it.');
+          setProcessing(false);
+          addLog('success', `Generation complete. ${clips.length + 1} clip(s) ready.`);
+          ws.close();
+        } else if (msg.type === 'error') {
+          const errMsg = msg.data?.error || 'Processing failed';
+          setCurrentStage('Error');
+          setMessage(errMsg);
+          setProcessing(false);
+          addLog('error', `Generation failed: ${errMsg}`);
+          ws.close();
+        }
+      } catch {
+        // ignore parse errors
+      }
+    };
 
-          setTimeout(() => {
-            setCurrentStage('Complete!');
+    ws.onopen = async () => {
+      try {
+        setCurrentStage('Downloading video...');
+        setMessage('Starting download from YouTube...');
+        setProgress(5);
+        addLog('info', 'WebSocket connected. Sending generate request...');
+
+        const response = await fetch(`${BACKEND}/api/generate`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            url,
+            settings: {
+              clip_duration: 30,
+              num_clips: 5,
+              subtitle_style: 'default',
+              zoom_effect: false,
+            },
+          }),
+        });
+
+        if (!response.ok) {
+          const err = await response.json().catch(() => ({}));
+          throw new Error(err.detail || 'Failed to start generation');
+        }
+
+        const data = await response.json();
+        addLog('info', `Job started: ${data.job_id}`);
+      } catch (error) {
+        const errMsg = error instanceof Error ? error.message : 'Failed to start processing';
+        setCurrentStage('Error');
+        setMessage(errMsg);
+        setProcessing(false);
+        addLog('error', `Generate request error: ${errMsg}`);
+        ws.close();
+      }
+    };
+  }, [isUrlValid, url, addLog, clips.length]);
+
+  const handleExport = useCallback(async () => {
+    if (selectedClips.size === 0) return;
+
+    setProcessing(true);
+    setCurrentStage('Exporting...');
+    setProgress(0);
+    setMessage('Preparing clips for export...');
+
+    const clipIds = Array.from(selectedClips);
+    addLog('info', `Exporting ${clipIds.length} clip(s)...`);
+
+    let ws: WebSocket;
+    try {
+      ws = new WebSocket(`ws://127.0.0.1:8000/ws`);
+    } catch {
+      const msg = 'Cannot connect to backend.';
+      setCurrentStage('Export Error');
+      setMessage(msg);
+      setProcessing(false);
+      addLog('error', msg);
+      return;
+    }
+
+    ws.onerror = () => {
+      const msg = 'Cannot reach backend at 127.0.0.1:8000.';
+      setCurrentStage('Export Error');
+      setMessage(msg);
+      setProcessing(false);
+      addLog('error', `Export WebSocket error: ${msg}`);
+    };
+
+    ws.onmessage = (event) => {
+      try {
+        const msg = JSON.parse(event.data);
+        if (msg.type === 'export_complete') {
+          const data = msg.data;
+          const exportPath = data.export_path || 'data/processed';
+          setCurrentStage('Export Complete!');
+          setProgress(100);
+          setMessage(`Clips saved to: ${exportPath}`);
+          setProcessing(false);
+          addLog('success', `Export complete. Files saved to: ${exportPath}`);
+          ws.close();
+        }
+      } catch {
+        // ignore
+      }
+    };
+
+    ws.onopen = async () => {
+      try {
+        setProgress(30);
+        setMessage('Sending export request...');
+
+        const response = await fetch(`${BACKEND}/api/export`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ clip_ids: clipIds }),
+        });
+
+        if (!response.ok) {
+          throw new Error('Export request failed');
+        }
+
+        setProgress(60);
+        setMessage('Export in progress, please wait...');
+        addLog('info', 'Export request sent. Waiting for completion...');
+
+        // Fallback: query export dir if no WebSocket message within 10s
+        setTimeout(async () => {
+          if (!processing) return;
+          try {
+            const dirRes = await fetch(`${BACKEND}/api/export/directory`);
+            if (dirRes.ok) {
+              const { path } = await dirRes.json();
+              setCurrentStage('Export Complete!');
+              setProgress(100);
+              setMessage(`Clips saved to: ${path}`);
+              addLog('success', `Export complete. Files saved to: ${path}`);
+            } else {
+              setCurrentStage('Export Complete!');
+              setProgress(100);
+              setMessage('Clips exported successfully.');
+              addLog('success', 'Export complete.');
+            }
+          } catch {
+            setCurrentStage('Export Complete!');
             setProgress(100);
-            setMessage('Your clips are ready!');
-            setProcessing(false);
-          }, 2000);
-        }, 2000);
-      }, 2000);
-    }, 2000);
-  };
+            setMessage('Clips exported successfully.');
+            addLog('success', 'Export complete.');
+          }
+          setProcessing(false);
+          ws.close();
+        }, 10000);
+      } catch (error) {
+        const errMsg = error instanceof Error ? error.message : 'Export failed';
+        setCurrentStage('Export Error');
+        setMessage(errMsg);
+        setProcessing(false);
+        addLog('error', `Export error: ${errMsg}`);
+        ws.close();
+      }
+    };
+  }, [selectedClips, processing, addLog]);
 
-  const toggleClipSelection = (id: number) => {
+  const toggleClipSelection = (id: string) => {
     const newSelected = new Set(selectedClips);
     if (newSelected.has(id)) {
       newSelected.delete(id);
@@ -93,30 +287,15 @@ function App() {
     setSelectedClips(newSelected);
   };
 
-  const handleExport = () => {
-    if (selectedClips.size === 0) return;
+  const selectAllClips = () => setSelectedClips(new Set(clips.map((c) => c.id as string)));
+  const deselectAllClips = () => setSelectedClips(new Set<string>());
 
-    setProcessing(true);
-    setCurrentStage('Exporting...');
-    setProgress(50);
-    setMessage('Preparing video files...');
-
-    setTimeout(() => {
-      setCurrentStage('Complete!');
-      setProgress(100);
-      setMessage('Clips exported successfully!');
-      setProcessing(false);
-    }, 2000);
-  };
-
-  // If showing onboarding, render onboarding screen
   if (showOnboarding) {
     return <ApiKeySetup onComplete={handleOnboardingComplete} />;
   }
 
   return (
     <>
-      {/* Main Application */}
       <MainLayout
         url={url}
         setUrl={setUrl}
@@ -129,15 +308,18 @@ function App() {
         clips={clips}
         selectedClips={selectedClips}
         toggleClipSelection={toggleClipSelection}
+        selectAllClips={selectAllClips}
+        deselectAllClips={deselectAllClips}
         handleGenerate={handleGenerate}
         handleExport={handleExport}
         onOpenSettings={() => setShowSettings(true)}
+        logEntries={logEntries}
+        logUnread={logUnread}
+        onClearLog={clearLog}
+        onMarkLogRead={markRead}
       />
 
-      {/* Settings Modal */}
-      {showSettings && (
-        <SettingsPanel onClose={handleSettingsClose} />
-      )}
+      {showSettings && <SettingsPanel onClose={handleSettingsClose} />}
     </>
   );
 }
