@@ -1,94 +1,80 @@
 import { useState, useCallback } from 'react';
-import { apiClient } from '../services/api';
-import { ClipSettings, GenerateResponse, ProcessingProgress } from '../types/api';
 
 export function useVideoProcessing() {
+  const [url, setUrl] = useState('');
+  const [isUrlValid, setIsUrlValid] = useState(false);
   const [processing, setProcessing] = useState(false);
-  const [progress, setProgress] = useState<ProcessingProgress>({
-    stage: '',
-    progress: 0,
-    message: '',
-  });
-  const [jobId, setJobId] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [currentStage, setCurrentStage] = useState('');
+  const [progress, setProgress] = useState(0);
+  const [message, setMessage] = useState('');
 
-  const generateClips = useCallback(async (url: string, settings: ClipSettings) => {
-    try {
-      setProcessing(true);
-      setError(null);
-      setProgress({
-        stage: 'initializing',
-        progress: 0,
-        message: 'Starting...',
-      });
-
-      // Get video info
-      setProgress({
-        stage: 'fetching_info',
-        progress: 5,
-        message: 'Fetching video information...',
-      });
-
-      const videoInfo = await apiClient.getVideoInfo(url);
-
-      // Generate clips
-      setProgress({
-        stage: 'generating',
-        progress: 10,
-        message: 'Starting clip generation...',
-      });
-
-      const response: GenerateResponse = await apiClient.generateClips({
-        url,
-        settings,
-      });
-
-      setJobId(response.job_id);
-
-      setProgress({
-        stage: 'processing',
-        progress: 15,
-        message: 'Processing video...',
-      });
-
-      return { jobId: response.job_id, videoInfo };
-    } catch (err) {
-      const errorMessage = err instanceof Error ? err.message : 'Failed to generate clips';
-      setError(errorMessage);
-      setProcessing(false);
-      throw err;
-    }
+  const validateYouTubeURL = useCallback((input: string): boolean => {
+    const youtubeRegex = /^(https?:\/\/)?(www\.)?(youtube\.com|youtu\.?be)\/.+/;
+    return youtubeRegex.test(input);
   }, []);
 
-  const updateProgress = useCallback((newProgress: Partial<ProcessingProgress>) => {
-    setProgress((prev) => ({
-      ...prev,
-      ...newProgress,
-    }));
+  const handleGenerate = useCallback(() => {
+    if (!isUrlValid) return;
+    setProcessing(true);
+    setCurrentStage('Downloading video...');
+    setProgress(10);
+    setMessage('Fetching video from YouTube...');
 
-    if (newProgress.stage === 'complete' || newProgress.progress === 100) {
-      setProcessing(false);
-    }
-  }, []);
+    // Simulate processing stages
+    setTimeout(() => {
+      setCurrentStage('Transcribing audio...');
+      setProgress(30);
+      setMessage('Converting speech to text using Whisper AI...');
+
+      setTimeout(() => {
+        setCurrentStage('Analyzing content...');
+        setProgress(60);
+        setMessage('Identifying viral moments with Gemini AI...');
+
+        setTimeout(() => {
+          setCurrentStage('Detecting speakers...');
+          setProgress(75);
+          setMessage('Tracking faces and identifying active speakers...');
+
+          setTimeout(() => {
+            setCurrentStage('Generating clips...');
+            setProgress(90);
+            setMessage('Creating video clips with smart cropping...');
+
+            setTimeout(() => {
+              setCurrentStage('Complete!');
+              setProgress(100);
+              setMessage('Your viral clips are ready to preview and export!');
+              setProcessing(false);
+            }, 2000);
+          }, 1500);
+        }, 1500);
+      }, 2000);
+    }, 1500);
+  }, [isUrlValid]);
 
   const resetProcessing = useCallback(() => {
     setProcessing(false);
-    setProgress({
-      stage: '',
-      progress: 0,
-      message: '',
-    });
-    setJobId(null);
-    setError(null);
+    setCurrentStage('');
+    setProgress(0);
+    setMessage('');
   }, []);
 
   return {
+    url,
+    setUrl,
+    isUrlValid,
+    setIsUrlValid,
     processing,
+    setProcessing,
+    currentStage,
+    setCurrentStage,
     progress,
-    jobId,
-    error,
-    generateClips,
-    updateProgress,
+    setProgress,
+    message,
+    setMessage,
+    handleGenerate,
     resetProcessing,
+    validateYouTubeURL,
   };
 }

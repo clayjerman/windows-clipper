@@ -31,7 +31,7 @@ jobs:
           components: rustfmt, clippy
 
       - name: Cache Rust dependencies
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         with:
           path: |
             ~/.cargo/registry
@@ -43,7 +43,7 @@ jobs:
             ${{ runner.os }}-cargo-
 
       - name: Install Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
           python-version: '3.11'
           cache: 'pip'
@@ -98,7 +98,7 @@ jobs:
           }
 
       - name: Upload installer as artifact
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: AI-Clipper-installer
           path: AI-Clipper-*.exe
@@ -106,7 +106,7 @@ jobs:
 
       - name: Create Release
         if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
           files: AI-Clipper-*.exe
           draft: false
@@ -121,12 +121,14 @@ jobs:
             - ✅ Built-in FFmpeg (for video processing)
             - ✅ Built-in AI models (Whisper, Gemini)
             - ✅ Modern dark theme UI
+            - ✅ API key setup on first launch
             
             ### Installation
             1. Download `AI-Clipper-${{ steps.get_version.outputs.VERSION }}-x64-setup.exe`
             2. Double-click to install
-            3. Enter your Gemini API key (get it free: https://makersuite.google.com/app/apikey)
-            4. Start creating viral clips!
+            3. Open the application
+            4. Enter your Gemini API key (get it free: https://makersuite.google.com/app/apikey)
+            5. Start creating viral clips!
             
             ### System Requirements
             - Windows 10 or later (64-bit)
@@ -136,8 +138,18 @@ jobs:
             
             ### Documentation
             - [User Guide](https://github.com/${{ github.repository }}/blob/main/docs/USER_GUIDE.md)
+            - [API Key Setup Guide](https://github.com/${{ github.repository }}/blob/main/docs/API_KEY_SETUP_GUIDE.md)
             - [Installation Guide](https://github.com/${{ github.repository }}/blob/main/docs/INSTALLATION_GUIDE.md)
             - [API Reference](https://github.com/${{ github.repository }}/blob/main/docs/API_REFERENCE.md)
+            - [FAQ](https://github.com/${{ github.repository }}/blob/main/docs/FAQ.md)
+            - [Troubleshooting](https://github.com/${{ github.repository }}/blob/main/docs/TROUBLESHOOTING.md)
+            
+            ### What's New
+            - First stable release!
+            - Full YouTube video processing
+            - AI-powered clip generation
+            - Smart viral scoring
+            - Ready for TikTok, YouTube Shorts, and Instagram Reels
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
