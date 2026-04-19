@@ -63,6 +63,16 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
+      - name: Build Python backend with PyInstaller
+        run: |
+          pip install pyinstaller
+          pyinstaller backend/backend.spec --distpath dist-backend
+          $dest = "frontend\src-tauri\binaries\ai-clipper-backend-x86_64-pc-windows-msvc.exe"
+          New-Item -ItemType Directory -Force -Path "frontend\src-tauri\binaries" | Out-Null
+          Copy-Item "dist-backend\ai-clipper-backend.exe" -Destination $dest
+          Write-Output "Backend binary copied to $dest"
+        shell: pwsh
+
       - name: Install Node.js dependencies
         working-directory: ./frontend
         run: npm ci
