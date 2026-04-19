@@ -1,28 +1,23 @@
 # -*- mode: python ; coding: utf-8 -*-
 """
-PyInstaller spec for the AI Clipper backend.
+PyInstaller spec for the AI Clipper backend — one-folder mode.
 
 Build command (from project root):
     pyinstaller backend/backend.spec
 
-Output:  dist/ai-clipper-backend.exe  (Windows)
-         dist/ai-clipper-backend      (Linux / macOS)
-
-After building, copy/rename the binary into the Tauri binaries folder:
-    Windows : frontend/src-tauri/binaries/ai-clipper-backend-x86_64-pc-windows-msvc.exe
-    Linux   : frontend/src-tauri/binaries/ai-clipper-backend-x86_64-unknown-linux-gnu
-    macOS   : frontend/src-tauri/binaries/ai-clipper-backend-x86_64-apple-darwin
+Output folder: dist-backend/ai-clipper-backend/
+  Copy that entire folder to frontend/src-tauri/backend-dist/ai-clipper-backend/
+  before running the Tauri build.
 """
 
 block_cipher = None
 
 a = Analysis(
     ["../run.py"],
-    pathex=[".."],         # project root
+    pathex=[".."],
     binaries=[],
     datas=[],
     hiddenimports=[
-        # uvicorn internals not auto-detected
         "uvicorn.logging",
         "uvicorn.loops",
         "uvicorn.loops.auto",
@@ -37,7 +32,6 @@ a = Analysis(
         "uvicorn.lifespan",
         "uvicorn.lifespan.off",
         "uvicorn.lifespan.on",
-        # starlette / fastapi
         "starlette.routing",
         "starlette.middleware",
         "starlette.middleware.cors",
@@ -45,16 +39,13 @@ a = Analysis(
         "starlette.staticfiles",
         "fastapi",
         "fastapi.middleware.cors",
-        # pydantic
         "pydantic",
         "pydantic.deprecated.class_validators",
         "pydantic_settings",
-        # async / http
         "anyio",
         "anyio._backends._asyncio",
         "h11",
         "httptools",
-        # backend package
         "backend",
         "backend.main",
         "backend.core.config",
@@ -92,23 +83,31 @@ a = Analysis(
 
 pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 
+# One-folder EXE — no extraction on every launch
 exe = EXE(
     pyz,
     a.scripts,
-    a.binaries,
-    a.zipfiles,
-    a.datas,
     [],
+    exclude_binaries=True,
     name="ai-clipper-backend",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=True,
-    upx_exclude=[],
-    runtime_tmpdir=None,
-    console=True,          # keep console so logs are visible / catchable by Tauri
+    upx=False,
+    console=True,
     disable_windowed_traceback=False,
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+)
+
+coll = COLLECT(
+    exe,
+    a.binaries,
+    a.zipfiles,
+    a.datas,
+    strip=False,
+    upx=False,
+    upx_exclude=[],
+    name="ai-clipper-backend",
 )

@@ -7,7 +7,7 @@ import { useLog } from './hooks/useLog';
 import BackendSplash from './components/BackendSplash';
 
 const BACKEND = 'http://127.0.0.1:58174';
-const HEALTH_TIMEOUT_S = 40;
+const HEALTH_TIMEOUT_S = 120;
 
 function useBackendReady() {
   const [ready, setReady] = useState(false);

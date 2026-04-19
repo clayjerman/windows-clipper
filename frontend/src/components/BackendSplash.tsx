@@ -10,7 +10,7 @@ const STAGES = [
   'Starting AI Clipper…',
   'Loading Python environment…',
   'Initialising backend server…',
-  'Almost ready…',
+  'Almost ready… (first launch may take a minute)',
 ];
 
 export default function BackendSplash({ timedOut, onRetry }: BackendSplashProps) {

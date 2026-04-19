@@ -69,10 +69,10 @@ jobs:
           pyinstaller backend/backend.spec --distpath dist-backend
           Write-Output "=== dist-backend contents ==="
           Get-ChildItem -Recurse dist-backend | Select-Object FullName
-          $dest = "frontend\src-tauri\binaries\ai-clipper-backend-x86_64-pc-windows-msvc.exe"
-          New-Item -ItemType Directory -Force -Path "frontend\src-tauri\binaries" | Out-Null
-          Copy-Item "dist-backend\ai-clipper-backend.exe" -Destination $dest
-          Write-Output "Backend binary copied to $dest"
+          $destDir = "frontend\src-tauri\backend-dist\ai-clipper-backend"
+          New-Item -ItemType Directory -Force -Path $destDir | Out-Null
+          Copy-Item -Recurse "dist-backend\ai-clipper-backend\*" -Destination $destDir
+          Write-Output "Backend folder copied to $destDir"
         shell: pwsh
 
       - name: Install Node.js dependencies

@@ -16,13 +16,7 @@
       "shell": {
         "all": false,
         "open": true,
-        "sidecar": true,
-        "scope": [
-          {
-            "name": "ai-clipper-backend",
-            "sidecar": true
-          }
-        ]
+        "sidecar": false
       },
       "dialog": {
         "all": false,
@@ -70,7 +64,6 @@
       "deb": {
         "depends": []
       },
-      "externalBin": ["binaries/ai-clipper-backend"],
       "macOS": {
         "entitlements": null,
         "exceptionDomain": "",
@@ -78,7 +71,7 @@
         "providerShortName": null,
         "signingIdentity": null
       },
-      "resources": [],
+      "resources": ["backend-dist/**/*"],
       "windows": {
         "certificateThumbprint": null,
         "digestAlgorithm": "sha256",

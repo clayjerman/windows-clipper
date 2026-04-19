@@ -32,6 +32,8 @@ frontend/src-tauri/Cargo.lock
 # Build outputs
 frontend/dist/
 frontend/.tauri/
+frontend/src-tauri/backend-dist/
+dist-backend/
 *.exe
 *.msi
 *.msix
