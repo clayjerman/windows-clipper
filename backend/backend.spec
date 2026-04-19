@@ -17,8 +17,8 @@ After building, copy/rename the binary into the Tauri binaries folder:
 block_cipher = None
 
 a = Analysis(
-    ["run.py"],
-    pathex=["."],          # project root
+    ["../run.py"],
+    pathex=[".."],         # project root
     binaries=[],
     datas=[],
     hiddenimports=[
